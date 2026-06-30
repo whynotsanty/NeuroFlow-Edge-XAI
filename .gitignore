@@ -1,0 +1,17 @@
+# Ambientes Virtuais
+venv/
+__pycache__/
+
+# Dados Brutos e Imagens Geradas
+*.pcap
+*.zip
+dataset_imagens/
+NonVPN-PCAPs-*/
+VPN-PCAPS-*/
+
+# Pesos dos Modelos (Binários Pesados)
+*.pth
+
+# Ficheiros de Sistema (Windows)
+desktop.ini
+Thumbs.db
