@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torchvision import models
 
 
@@ -46,39 +45,52 @@ class DepthwiseSeparableBlock(nn.Module):
 
 # --- 1. A NOSSA CNN CASEIRA (Compacta e Edge-Friendly) ---
 class NeuroFlowCNN(nn.Module):
-    def __init__(self, num_classes=2):
+    def __init__(self, num_classes=4):
         super(NeuroFlowCNN, self).__init__()
-        self.stem = ConvBNReLU(1, 16)
-        self.block1 = DepthwiseSeparableBlock(16, 32, stride=2)
-        self.block2 = DepthwiseSeparableBlock(32, 64, stride=2)
-        self.block3 = DepthwiseSeparableBlock(64, 96, stride=2)
-        self.pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.dropout = nn.Dropout(p=0.2)
-        self.classifier = nn.Linear(96, num_classes)
+        
+        # STEM: Mantém resolução 28x28 (stride=1). 
+        # Fundamental para ler os primeiros 54 bytes de cabeçalho intactos.
+        self.stem = ConvBNReLU(1, 16, stride=1)
+        
+        # BLOCO 1: Extração profunda sem reduzir o espaço
+        self.block1 = DepthwiseSeparableBlock(16, 32, stride=1)
+        # Primeiro downsampling (passa para 14x14)
+        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
+        
+        # BLOCO 2: Aprofundar as features
+        self.block2 = DepthwiseSeparableBlock(32, 64, stride=1)
+        # Segundo downsampling (passa para 7x7)
+        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
+        
+        # CLASSIFICADOR: Substituímos o AdaptiveAvgPool por um Flatten rigoroso
+        # 64 canais * 7 * 7 = 3136 features
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(3136, 64),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=0.3),
+            nn.Linear(64, num_classes)
+        )
 
     def forward(self, x):
         x = self.stem(x)
-        x = self.block1(x)
-        x = self.block2(x)
-        x = self.block3(x)
-        x = self.pool(x)
-        x = torch.flatten(x, 1)
-        x = self.dropout(x)
+        x = self.pool1(self.block1(x))
+        x = self.pool2(self.block2(x))
         x = self.classifier(x)
         return x
 
+
 # --- 2. O MOTOR DE SELEÇÃO DE ARQUITETURAS ---
-def get_model(model_name="custom", num_classes=2):
+def get_model(model_name="custom", num_classes=4):
     """
     Fábrica que devolve o modelo escolhido e já adaptado para 1 canal (escala de cinzas).
     """
     if model_name == "custom":
-        print("A carregar modelo: CNN compacta para Edge (1 canal, 28x28)")
+        print("A carregar modelo: NeuroFlowCNN compacta para Edge (1 canal, 28x28)")
         return NeuroFlowCNN(num_classes=num_classes)
 
     elif model_name == "resnet18":
         print("A carregar modelo: ResNet-18 (Força Bruta e Alta Precisão)")
-        # Carregamos a arquitetura sem pesos pré-treinados
         model = models.resnet18(weights=None)
         # HACK: Modificar a primeira camada para aceitar 1 canal em vez de 3
         model.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
@@ -99,14 +111,19 @@ def get_model(model_name="custom", num_classes=2):
     else:
         raise ValueError("Modelo não reconhecido. Opções válidas: 'custom', 'resnet18', 'mobilenetv2'")
 
+
 if __name__ == "__main__":
-    # Teste rápido da arquitetura compacta para 28x28.
+    # Teste rápido da arquitetura compacta para 28x28 com as nossas 4 classes.
     modelo_escolhido = get_model(model_name="custom", num_classes=4)
     
-    # Criar um pacote falso para garantir que a matemática dos tensores não quebra
+    # Criar um lote falso de 32 pacotes em escala de cinzas (1 canal, 28x28)
     pacote_falso = torch.randn(32, 1, 28, 28)
     previsao = modelo_escolhido(pacote_falso)
     
-    print("\n--- Teste de Saída ---")
+    print("\n--- Teste de Saída da CNN Customizada ---")
     print(f"Formato da Saída: {previsao.shape}") 
-    # Tem de dar smp [32, 2]
+    
+    if previsao.shape == (32, 4):
+        print("✅ Sucesso: O tensor de saída está dimensionado corretamente para o cálculo de Entropia.")
+    else:
+        print("❌ Erro no dimensionamento das camadas lineares.")
